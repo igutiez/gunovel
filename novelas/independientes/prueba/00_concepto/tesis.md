@@ -1,3 +1,3 @@
 # Tesis
 
-¿Qué trata la novela por debajo de la trama? Pregunta central y tensiones temáticas.
+La verdad enterrada siempre exige un precio al que la desentierra.
