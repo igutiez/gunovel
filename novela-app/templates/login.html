@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Acceder — Novela App{% endblock %}
+{% block body %}
+<div class="login-wrap">
+  <form method="post" class="login-form">
+    <h1>Novela App</h1>
+    <label>
+      <span>Usuario</span>
+      <input type="text" name="username" autofocus required autocomplete="username" />
+    </label>
+    <label>
+      <span>Contraseña</span>
+      <input type="password" name="password" required autocomplete="current-password" />
+    </label>
+    <button type="submit">Entrar</button>
+  </form>
+</div>
+{% endblock %}

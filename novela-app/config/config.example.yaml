@@ -1,0 +1,17 @@
+# Configuración de ejemplo (la real vive en .env).
+# Este fichero documenta las opciones extendidas que podrían añadirse
+# sin tocar variables de entorno.
+
+app:
+  nombre: "Novela App"
+  idioma: "es"
+
+ia:
+  modelo_por_defecto: "claude-sonnet-4-6"
+  modelo_opus: "claude-opus-4-7"
+  max_tool_calls_por_turno: 5
+  ventana_historial_mensajes: 50
+  ventana_historial_tokens: 100000
+
+git:
+  auto_push_default: false

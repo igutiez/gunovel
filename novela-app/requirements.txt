@@ -1,0 +1,10 @@
+Flask>=3.0
+Flask-Login>=0.6
+anthropic>=0.40
+python-frontmatter>=1.1
+PyYAML>=6.0
+Werkzeug>=3.0
+python-dotenv>=1.0
+gunicorn>=21.2
+markdown>=3.5
+EbookLib>=0.18

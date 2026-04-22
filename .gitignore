@@ -1,0 +1,28 @@
+# Memoria y caché de Claude
+.claude/
+.claude-mem/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# Entorno y secretos
+.env
+.env.local
+novela-app/.env
+novela-app/.env.local
+
+# Estado de la app
+*.log
+*.sqlite
+*.db
+instance/
+
+# OS
+.DS_Store
+Thumbs.db
+*.tmp
