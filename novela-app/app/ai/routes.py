@@ -21,6 +21,7 @@ from ..files.parser import (
 from ..files.project import ProyectoNoEncontrado, cargar_proyecto, escribir_orden, leer_orden
 from ..versioning.git_ops import commit_cambios
 from . import propuestas as prop_mod
+from .auditoria import auditar as auditar_proyecto
 from .resumen import resumir_historial
 from .tool_use import ejecutar_turno
 
@@ -47,6 +48,25 @@ def api_conversaciones(slug: str):
 def api_ver_conversacion(slug: str, conv_id: str):
     _cargar_o_404(slug)
     return jsonify({"mensajes": mensajes_de_conversacion(conv_id)})
+
+
+@bp.get("/proyecto/<slug>/auditoria")
+@login_required
+def api_auditoria(slug: str):
+    proyecto = _cargar_o_404(slug)
+    cap_slug = request.args.get("slug") or None
+    cats_raw = request.args.get("categorias") or ""
+    categorias = [c.strip() for c in cats_raw.split(",") if c.strip()] or None
+    minimo = int(request.args.get("min_palabras", "1500") or "1500")
+    maximo = int(request.args.get("max_palabras", "2500") or "2500")
+    resultado = auditar_proyecto(
+        proyecto,
+        slug=cap_slug,
+        categorias=categorias,
+        minimo_palabras=minimo,
+        maximo_palabras=maximo,
+    )
+    return jsonify(resultado)
 
 
 @bp.post("/proyecto/<slug>/chat")

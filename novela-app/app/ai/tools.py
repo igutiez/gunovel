@@ -87,6 +87,37 @@ TOOL_SCHEMAS: list[dict] = [
         },
     },
     {
+        "name": "auditar_capitulo",
+        "description": (
+            "Ejecuta auditoría editorial determinista (sin IA) sobre un capítulo "
+            "o todo el proyecto. Detecta repeticiones de palabras y n-gramas, "
+            "tics/muletillas configurables, verbos dicendi (dijo vs color), "
+            "mezcla de tiempos verbales, erratas tipográficas, longitud fuera "
+            "de rango, cronología y coherencia de metadata. Devuelve métricas "
+            "y hallazgos; tú decides qué significa cada uno. Para auditoría "
+            "completa del libro pasa slug = 'proyecto'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "slug": {
+                    "type": "string",
+                    "description": "Slug del capítulo (ej. 'jose_luis'), o 'proyecto' para todo el libro.",
+                },
+                "categorias": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Subset de ['repeticiones_palabra','repeticiones_ngrama',"
+                        "'tics','dicendi','tiempos','erratas','longitud',"
+                        "'cronologia','coherencia']. Omitir para ejecutar todas."
+                    ),
+                },
+            },
+            "required": ["slug"],
+        },
+    },
+    {
         "name": "leer_canon_saga",
         "description": "Si el proyecto es un libro de saga, lee un fichero del canon compartido (rutas bajo 00_canon_compartido/). Falla si el proyecto no pertenece a una saga.",
         "input_schema": {
@@ -338,6 +369,15 @@ def _tool_verificar(args: dict, proyecto: Proyecto) -> dict:
     return _verificar(proyecto, ambito)
 
 
+def _tool_auditar(args: dict, proyecto: Proyecto) -> dict:
+    from .auditoria import auditar
+
+    slug = args.get("slug", "proyecto")
+    categorias = args.get("categorias") or None
+    slug_param = None if slug in ("proyecto", "*", "") else slug
+    return auditar(proyecto, slug=slug_param, categorias=categorias)
+
+
 def _tool_leer_canon(args: dict, proyecto: Proyecto) -> dict:
     if not proyecto.canon_ruta:
         raise ToolError("Este proyecto no pertenece a una saga; no hay canon compartido.")
@@ -495,6 +535,7 @@ _HANDLERS = {
     "consultar_grafo_relaciones": _tool_grafo,
     "obtener_info_capitulo": _tool_info_capitulo,
     "verificar_coherencia": _tool_verificar,
+    "auditar_capitulo": _tool_auditar,
     "leer_canon_saga": _tool_leer_canon,
     "modificar_fichero": _tool_modificar_fichero,
     "crear_fichero": _tool_crear_fichero,

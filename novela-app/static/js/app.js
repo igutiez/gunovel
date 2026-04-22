@@ -929,6 +929,7 @@
     }
     if (modo === "historial") cargarModoHistorial();
     if (modo === "audit") cargarModoAudit();
+    if (modo === "auditoria") cargarModoAuditoria();
   }
 
   // ----------------------------------------------------------- Modo historial
@@ -1018,6 +1019,279 @@
     return String(s || "").replace(/[&<>"]/g, (c) => (
       {"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]
     ));
+  }
+
+  // -------------------------------------------------------- Modo auditoría
+  const AUDITORIA_CATEGORIAS = [
+    { key: "repeticiones_palabra", label: "Repeticiones palabra" },
+    { key: "repeticiones_ngrama", label: "Repeticiones frase" },
+    { key: "tics", label: "Tics / muletillas" },
+    { key: "dicendi", label: "Verbos dicendi" },
+    { key: "tiempos", label: "Tiempos verbales" },
+    { key: "erratas", label: "Erratas tipográficas" },
+    { key: "longitud", label: "Longitud" },
+    { key: "cronologia", label: "Cronología" },
+    { key: "coherencia", label: "Coherencia canon" },
+  ];
+
+  async function cargarModoAuditoria() {
+    const cont = document.getElementById("modo-auditoria");
+    if (!state.proyectoSlug) {
+      cont.innerHTML = '<div class="empty-state">Selecciona un proyecto.</div>';
+      return;
+    }
+    if (!cont.dataset.montado) {
+      cont.innerHTML = `
+        <div class="auditoria-controles">
+          <label>Ámbito:
+            <select id="auditoria-ambito">
+              <option value="actual">Capítulo activo</option>
+              <option value="proyecto">Todo el proyecto</option>
+            </select>
+          </label>
+          <label>Min palabras:
+            <input type="number" id="auditoria-min" value="1500" style="width:70px" />
+          </label>
+          <label>Max palabras:
+            <input type="number" id="auditoria-max" value="2500" style="width:70px" />
+          </label>
+          <button type="button" id="auditoria-ejecutar" class="auditoria-boton">Ejecutar auditoría</button>
+        </div>
+        <div class="auditoria-categorias" id="auditoria-categorias"></div>
+        <div class="auditoria-resultados" id="auditoria-resultados">
+          <div class="empty-state">Pulsa "Ejecutar auditoría".</div>
+        </div>`;
+      const catsDiv = document.getElementById("auditoria-categorias");
+      for (const c of AUDITORIA_CATEGORIAS) {
+        const lbl = document.createElement("label");
+        const inp = document.createElement("input");
+        inp.type = "checkbox";
+        inp.checked = true;
+        inp.value = c.key;
+        lbl.appendChild(inp);
+        lbl.appendChild(document.createTextNode(" " + c.label));
+        catsDiv.appendChild(lbl);
+      }
+      document.getElementById("auditoria-ejecutar").addEventListener("click", ejecutarAuditoria);
+      cont.dataset.montado = "1";
+    }
+  }
+
+  async function ejecutarAuditoria() {
+    const btn = document.getElementById("auditoria-ejecutar");
+    const resultados = document.getElementById("auditoria-resultados");
+    const ambito = document.getElementById("auditoria-ambito").value;
+    const min = document.getElementById("auditoria-min").value || "1500";
+    const max = document.getElementById("auditoria-max").value || "2500";
+    const categorias = Array.from(document.querySelectorAll("#auditoria-categorias input:checked"))
+      .map((i) => i.value);
+
+    if (ambito === "actual" && !state.rutaActiva) {
+      resultados.innerHTML = '<div class="empty-state">Abre un capítulo primero o cambia a "Todo el proyecto".</div>';
+      return;
+    }
+    if (ambito === "actual" && !state.rutaActiva.startsWith("04_capitulos/")) {
+      resultados.innerHTML = '<div class="empty-state">La auditoría se aplica a capítulos (carpeta 04_capitulos/).</div>';
+      return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = "Ejecutando…";
+    resultados.innerHTML = '<div class="empty-state">Auditando…</div>';
+    const params = new URLSearchParams();
+    if (ambito === "actual") {
+      const slug = state.rutaActiva.replace(/^04_capitulos\//, "").replace(/\.md$/, "");
+      params.set("slug", slug);
+    }
+    if (categorias.length) params.set("categorias", categorias.join(","));
+    params.set("min_palabras", min);
+    params.set("max_palabras", max);
+
+    try {
+      const data = await api(`/api/proyecto/${slugURL(state.proyectoSlug)}/auditoria?${params.toString()}`);
+      pintarAuditoria(data);
+    } catch (e) {
+      resultados.innerHTML = `<div class="empty-state">Error: ${escape(String(e.message || e))}</div>`;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Ejecutar auditoría";
+    }
+  }
+
+  function pintarAuditoria(data) {
+    const cont = document.getElementById("auditoria-resultados");
+    cont.innerHTML = "";
+    if (data.coherencia_global && data.coherencia_global.total_hallazgos) {
+      const box = document.createElement("div");
+      box.className = "auditoria-cap";
+      box.innerHTML = `<div class="auditoria-cap-header"><h4>Coherencia global</h4><span class="meta">${data.coherencia_global.total_hallazgos} hallazgos</span></div>`;
+      box.appendChild(renderCoherencia(data.coherencia_global.hallazgos));
+      cont.appendChild(box);
+    }
+    for (const cap of data.capitulos || []) {
+      cont.appendChild(renderCapituloAuditoria(cap));
+    }
+    if (!(data.capitulos || []).length) {
+      cont.innerHTML = '<div class="empty-state">Sin capítulos en orden.json.</div>';
+    }
+  }
+
+  function renderCapituloAuditoria(cap) {
+    const box = document.createElement("div");
+    box.className = "auditoria-cap";
+    if (cap.error) {
+      box.innerHTML = `<div class="auditoria-cap-header"><h4>${escape(cap.slug)}</h4><span class="meta err">${escape(cap.error)}</span></div>`;
+      return box;
+    }
+    const header = document.createElement("div");
+    header.className = "auditoria-cap-header";
+    header.innerHTML =
+      `<h4>${escape(cap.titulo || cap.slug)}</h4>` +
+      `<span class="meta">${escape(cap.slug)}</span>`;
+    const abrir = document.createElement("button");
+    abrir.className = "abrir";
+    abrir.textContent = "Abrir";
+    abrir.addEventListener("click", () => {
+      state.rutaActiva = cap.ruta;
+      abrirFichero(cap.ruta);
+      cambiarModo("editor");
+    });
+    header.appendChild(abrir);
+    box.appendChild(header);
+
+    if (cap.longitud) {
+      const s = secc("Longitud");
+      if (cap.longitud.fuera_rango) {
+        s.appendChild(advertencia(`${cap.longitud.palabras} palabras (rango ${cap.longitud.minimo}–${cap.longitud.maximo})`));
+      } else {
+        s.appendChild(item(null, `${cap.longitud.palabras} palabras`, null, "ok"));
+      }
+      box.appendChild(s);
+    }
+    if (cap.dicendi) {
+      const s = secc("Dicendi");
+      s.appendChild(item(cap.dicendi.invisibles, "dijo/dice (invisibles)", null, "ok"));
+      s.appendChild(item(cap.dicendi.color, `de color (${cap.dicendi.color_porcentaje}%)`, null, cap.dicendi.advertencia ? "warn" : null));
+      if (cap.dicendi.advertencia) s.appendChild(advertencia(cap.dicendi.advertencia));
+      for (const [v, n] of cap.dicendi.color_top || []) {
+        s.appendChild(item(n, v, null));
+      }
+      box.appendChild(s);
+    }
+    if (cap.tiempos) {
+      const s = secc("Tiempos verbales");
+      s.appendChild(item(null, `Dominante: ${cap.tiempos.dominante || "—"} (presente ${cap.tiempos.pct_presente || 0}%, pasado ${cap.tiempos.pct_pasado || 0}%)`));
+      if (cap.tiempos.advertencia) s.appendChild(advertencia(cap.tiempos.advertencia));
+      box.appendChild(s);
+    }
+    if (cap.repeticiones_palabra) {
+      const s = secc(`Repeticiones de palabra (${cap.repeticiones_palabra.length})`);
+      if (!cap.repeticiones_palabra.length) s.appendChild(vacio());
+      for (const r of cap.repeticiones_palabra) {
+        s.appendChild(item(r.apariciones, r.palabra, `líneas ${r.lineas.slice(0,6).join(", ")}${r.lineas.length > 6 ? "…" : ""}${r.min_distancia_lineas != null ? ` · min dist ${r.min_distancia_lineas}l` : ""}`));
+      }
+      box.appendChild(s);
+    }
+    if (cap.repeticiones_ngrama) {
+      const s = secc(`Repeticiones de frase 5-gram (${cap.repeticiones_ngrama.length})`);
+      if (!cap.repeticiones_ngrama.length) s.appendChild(vacio());
+      for (const r of cap.repeticiones_ngrama) {
+        s.appendChild(item(r.apariciones, `"${r.ngrama}"`));
+      }
+      box.appendChild(s);
+    }
+    if (cap.tics) {
+      const s = secc(`Tics / muletillas (${cap.tics.length})`);
+      if (!cap.tics.length) s.appendChild(vacio("Sin tics configurados o sin matches."));
+      for (const t of cap.tics) {
+        s.appendChild(item(t.apariciones, t.tic, `líneas ${t.lineas.slice(0,6).join(", ")}`));
+      }
+      box.appendChild(s);
+    }
+    if (cap.erratas) {
+      const s = secc(`Erratas (${cap.erratas.length})`);
+      if (!cap.erratas.length) s.appendChild(item(null, "Sin erratas detectadas", null, "ok"));
+      for (const e of cap.erratas) {
+        const txt = e.tipo + (e.linea ? ` (línea ${e.linea})` : "") + (e.mensaje ? ` — ${e.mensaje}` : "");
+        s.appendChild(item(null, txt, null, "warn"));
+      }
+      box.appendChild(s);
+    }
+    if (cap.cronologia) {
+      const s = secc("Cronología extraída");
+      if (!cap.cronologia.fechas.length && !cap.cronologia.dias_semana.length) {
+        s.appendChild(vacio("Sin fechas/días explícitos."));
+      }
+      for (const f of cap.cronologia.fechas) {
+        s.appendChild(item(null, `${f.dia} de ${f.mes}${f.anio ? " de " + f.anio : ""} · línea ${f.linea}`));
+      }
+      for (const d of cap.cronologia.dias_semana) {
+        s.appendChild(item(null, `${d.dia_semana} · línea ${d.linea}`));
+      }
+      box.appendChild(s);
+    }
+    if (cap.coherencia) {
+      const s = secc(`Coherencia canon (${cap.coherencia.total_hallazgos})`);
+      if (!cap.coherencia.total_hallazgos) s.appendChild(item(null, "Sin hallazgos", null, "ok"));
+      s.appendChild(renderCoherencia(cap.coherencia.hallazgos));
+      box.appendChild(s);
+    }
+
+    return box;
+  }
+
+  function renderCoherencia(hallazgos) {
+    const wrap = document.createElement("div");
+    for (const h of hallazgos || []) {
+      const clase = h.gravedad === "alta" ? "err" : h.gravedad === "media" ? "warn" : "";
+      wrap.appendChild(item(null, `[${h.gravedad}] ${h.tipo}: ${h.mensaje}`, h.fichero, clase));
+    }
+    return wrap;
+  }
+
+  function secc(titulo) {
+    const d = document.createElement("div");
+    d.className = "auditoria-seccion";
+    const h = document.createElement("h5");
+    h.textContent = titulo;
+    d.appendChild(h);
+    return d;
+  }
+
+  function item(cant, valor, lineas, clase) {
+    const d = document.createElement("div");
+    d.className = "auditoria-item" + (clase ? " " + clase : "");
+    if (cant != null) {
+      const c = document.createElement("span");
+      c.className = "cant";
+      c.textContent = String(cant);
+      d.appendChild(c);
+    }
+    const v = document.createElement("span");
+    v.className = "valor";
+    v.textContent = valor;
+    d.appendChild(v);
+    if (lineas) {
+      const l = document.createElement("span");
+      l.className = "lineas";
+      l.textContent = lineas;
+      d.appendChild(l);
+    }
+    return d;
+  }
+
+  function advertencia(texto) {
+    const d = document.createElement("div");
+    d.className = "auditoria-advertencia";
+    d.textContent = texto;
+    return d;
+  }
+
+  function vacio(texto) {
+    const d = document.createElement("div");
+    d.className = "auditoria-vacio";
+    d.textContent = texto || "Nada que señalar.";
+    return d;
   }
 
   // ----------------------------------------------------------- Modo audit
