@@ -1056,6 +1056,7 @@
             <input type="number" id="auditoria-max" value="2500" style="width:70px" />
           </label>
           <button type="button" id="auditoria-ejecutar" class="auditoria-boton">Ejecutar auditoría</button>
+          <button type="button" id="auditoria-ia" class="auditoria-boton" style="background:var(--warn);color:#0c1014" title="Lanza un pase editorial con IA sobre el capítulo activo: métricas deterministas + juicio editorial + propuestas con diff">Pase editorial con IA</button>
         </div>
         <div class="auditoria-categorias" id="auditoria-categorias"></div>
         <div class="auditoria-resultados" id="auditoria-resultados">
@@ -1073,8 +1074,66 @@
         catsDiv.appendChild(lbl);
       }
       document.getElementById("auditoria-ejecutar").addEventListener("click", ejecutarAuditoria);
+      document.getElementById("auditoria-ia").addEventListener("click", lanzarPaseEditorialIA);
       cont.dataset.montado = "1";
     }
+  }
+
+  async function lanzarPaseEditorialIA() {
+    const ambito = document.getElementById("auditoria-ambito").value;
+    const min = document.getElementById("auditoria-min").value || "1500";
+    const max = document.getElementById("auditoria-max").value || "2500";
+
+    let slug, promptTexto, tipoInforme;
+    if (ambito === "actual") {
+      if (!state.rutaActiva || !state.rutaActiva.startsWith("04_capitulos/")) {
+        alert("Abre un capítulo (en 04_capitulos/) o cambia a 'Todo el proyecto'.");
+        return;
+      }
+      slug = state.rutaActiva.replace(/^04_capitulos\//, "").replace(/\.md$/, "");
+      tipoInforme = "capitulo";
+      promptTexto = promptPaseEditorialCapitulo(slug, min, max);
+    } else {
+      tipoInforme = "proyecto";
+      promptTexto = promptPaseEditorialProyecto(min, max);
+    }
+
+    // Asegurar que hay conversación; si no, el endpoint la crea.
+    // Cambiar al modo editor para que se vean las propuestas cuando lleguen.
+    cambiarModo("editor");
+    // Envío por chat usando el mismo flujo de mensajes normal.
+    const input = document.getElementById("chat-input");
+    input.value = promptTexto;
+    enviarMensajeChat();
+  }
+
+  function promptPaseEditorialCapitulo(slug, min, max) {
+    return (
+      `Pase editorial completo sobre el capítulo **${slug}**.
+
+1. Llama a \`auditar_capitulo\` con slug="${slug}" y rango ${min}-${max} palabras para tener métricas deterministas (repeticiones, dicendi, tiempos, erratas, tics, coherencia canon).
+2. Lee el capítulo (\`leer_fichero\`) y las fichas de los personajes que aparecen en la cabecera (\`leer_fichero\` por cada uno). Si hay raccord, escaleta o estilo relevantes, también.
+3. Aplica juicio editorial sobre lo que la auditoría determinista NO puede ver:
+   - Sobreexplicación / glosa / subrayado del narrador.
+   - Efectismo, cliffhangers forzados, frases aisladas abusivas.
+   - Voz propia de cada personaje en diálogo.
+   - Atribuciones débiles, coletillas didácticas.
+   - Raccord con el capítulo anterior.
+   - Anacronismos o contradicciones con el canon.
+4. Propón las correcciones con \`modificar_fichero\`. UN solo modificar_fichero con el capítulo completo reescrito respetando la voz del autor (mínima intervención, no reescritura); motivo breve explicando qué categorías tocaste.
+
+No expliques todo en el chat; que el diff hable. Al final resume en 3-5 bullets qué cambiaste y qué dejaste pendiente por ser decisión del autor.`
+    );
+  }
+
+  function promptPaseEditorialProyecto(min, max) {
+    return (
+      `Informe editorial global del proyecto.
+
+1. Llama a \`auditar_capitulo\` con slug="proyecto" y rango ${min}-${max} palabras.
+2. Identifica los 3-5 capítulos con problemas más graves (prioriza: dicendi con color > 50%, repeticiones excesivas, coherencia canon con gravedad alta, longitud muy fuera de rango).
+3. NO propongas cambios todavía. Solo informe: por cada capítulo problemático, diagnóstico breve y qué intervenciones sugerirías. El autor decidirá cuáles atacar después uno a uno.`
+    );
   }
 
   async function ejecutarAuditoria() {
