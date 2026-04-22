@@ -1,3 +1,10 @@
+---
+slug: cap02
+personajes: [paula, asier, kontxi, patxi, gorka]
+pov: paula
+estado: borrador
+---
+
 # Paula y el contrato
 
 Paula había hecho el trayecto en coche.

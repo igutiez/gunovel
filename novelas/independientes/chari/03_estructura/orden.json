@@ -1,3 +1,21 @@
 {
-  "capitulos": []
+  "capitulos": [
+    {"slug": "cap01"},
+    {"slug": "cap02"},
+    {"slug": "cap03"},
+    {"slug": "cap04"},
+    {"slug": "cap05"},
+    {"slug": "cap06"},
+    {"slug": "cap07"},
+    {"slug": "cap08"},
+    {"slug": "cap09"},
+    {"slug": "cap10"},
+    {"slug": "cap11"},
+    {"slug": "cap12"},
+    {"slug": "cap13"},
+    {"slug": "cap14"},
+    {"slug": "cap15"},
+    {"slug": "cap16"},
+    {"slug": "cap17"}
+  ]
 }

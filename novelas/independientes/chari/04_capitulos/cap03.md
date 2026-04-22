@@ -1,3 +1,10 @@
+---
+slug: cap03
+personajes: [begoña, chari, kontxi, patxi, lurdes, iñaki, txomin]
+pov: coral
+estado: borrador
+---
+
 # Begoña y el nombre
 
 El día que encendieron a Chari llovía.

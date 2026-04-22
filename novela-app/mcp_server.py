@@ -132,19 +132,43 @@ def resumen_canon_actual(proyecto_slug: str) -> dict:
     slugs = list(etiquetas.keys())
     ultimo = None
     siguiente = None
+    capitulos_huerfanos: list[str] = []  # existen con prosa pero sin frontmatter estado
+
+    def _esta_redactado(md: Path, parsed: dict | None) -> bool:
+        """Heurística: tiene frontmatter con estado != esqueleto, o >200 palabras."""
+        if parsed:
+            estado = (parsed.get("metadata") or {}).get("estado", "")
+            if estado and estado != "esqueleto":
+                return True
+            cuerpo = parsed.get("content") or ""
+        else:
+            try:
+                cuerpo = md.read_text(encoding="utf-8")
+            except OSError:
+                return False
+        palabras = len(cuerpo.split())
+        return palabras >= 200
+
     for s in reversed(slugs):
         md = base / "04_capitulos" / f"{s}.md"
         if not md.exists():
             continue
         parsed = _leer(md)
-        if not parsed:
-            continue
-        estado = (parsed["metadata"] or {}).get("estado", "")
-        if estado and estado != "esqueleto":
+        if _esta_redactado(md, parsed):
             ultimo = s
             idx = slugs.index(s)
             if idx + 1 < len(slugs):
                 siguiente = slugs[idx + 1]
+            # Detectar huérfanos: capítulos existentes sin frontmatter estado.
+            for s2 in slugs[: idx + 1]:
+                md2 = base / "04_capitulos" / f"{s2}.md"
+                if not md2.exists():
+                    continue
+                parsed2 = _leer(md2)
+                if parsed2:
+                    estado = (parsed2.get("metadata") or {}).get("estado", "")
+                    if not estado:
+                        capitulos_huerfanos.append(s2)
             break
     if ultimo is None and slugs:
         siguiente = slugs[0]
@@ -161,6 +185,13 @@ def resumen_canon_actual(proyecto_slug: str) -> dict:
         "total_capitulos_en_orden": len(slugs),
         "ultimo_redactado": ultimo,
         "siguiente_a_redactar": siguiente,
+        "capitulos_sin_frontmatter": capitulos_huerfanos,
+        "aviso_huerfanos": (
+            "Estos capítulos existen con prosa pero carecen de frontmatter YAML. "
+            "Añade frontmatter (slug, personajes, pov, estado) antes de redactar el siguiente."
+            if capitulos_huerfanos
+            else None
+        ),
         "tiene_canon_saga": bool(p.canon_ruta),
     }
 

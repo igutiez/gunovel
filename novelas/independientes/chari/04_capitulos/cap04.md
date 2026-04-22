@@ -1,3 +1,10 @@
+---
+slug: cap04
+personajes: [chari, gorka, gotzone]
+pov: coral
+estado: borrador
+---
+
 # Lo que Chari sabe
 
 Durante los primeros cuatro días, cuando las oficinas estaban vacías y la planta funcionaba con el ruido sordo del turno de noche, Chari procesó.
