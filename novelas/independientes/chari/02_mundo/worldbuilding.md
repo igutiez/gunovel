@@ -2,7 +2,7 @@
 
 ## La empresa
 
-**Nombre:** Talleres Zubizarreta e Hijos / Industrias Altube / Bombas Larrea — algo que suene a apellido fundador convertido en marca]
+**Nombre:** Talleres Zubizarreta 
 
 **Ubicación:** Balmaseda, Bizkaia. Pueblo pequeño/mediano donde todo el mundo se conoce. Los rumores viajan solos. Algunos empleados son cuñados entre sí. La madre de alguien es amiga de Gotzone.
 
