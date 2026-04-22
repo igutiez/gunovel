@@ -17,6 +17,7 @@ El proceso corre en un thread separado para no bloquear la request.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import subprocess
@@ -100,6 +101,13 @@ def _run_session(sesion: SesionCC, permitir_cerrados: bool) -> None:
     args = [
         "claude",
         "--print",
+        # Streaming de eventos: una línea JSON por evento (mensajes, tool_use,
+        # tool_result). Sin esto, claude --print no emite stdout hasta
+        # terminar y el usuario no ve progreso durante los 2-5 minutos que
+        # puede tardar un capítulo.
+        "--output-format",
+        "stream-json",
+        "--verbose",
         # bypassPermissions evita diálogos interactivos. La seguridad la
         # garantizan los hooks de `.claude/settings.json` (bloquean .env,
         # capítulos cerrados, y filtran comandos Bash peligrosos via `deny`).
@@ -149,12 +157,15 @@ def _run_session(sesion: SesionCC, permitir_cerrados: bool) -> None:
     except Exception as exc:  # noqa: BLE001
         sesion.log_lines.append(f"[app] error enviando prompt: {exc}")
 
-    # Leer stdout línea a línea.
+    # Leer stdout línea a línea (cada línea es un JSON de evento).
     try:
         assert proc.stdout is not None
         for linea in proc.stdout:
-            sesion.log_lines.append(linea.rstrip("\n"))
-            # Retener máximo 10000 líneas para no reventar memoria.
+            linea = linea.rstrip("\n")
+            if not linea:
+                continue
+            for evento_texto in _formatear_evento_stream_json(linea):
+                sesion.log_lines.append(evento_texto)
             if len(sesion.log_lines) > 10000:
                 sesion.log_lines = sesion.log_lines[-5000:]
     except Exception as exc:  # noqa: BLE001
@@ -191,6 +202,120 @@ def detener_sesion(sid: str) -> bool:
     except Exception:
         return False
     return True
+
+
+def _formatear_evento_stream_json(linea: str) -> list[str]:
+    """Convierte una línea JSON de stream-json en líneas humanas.
+
+    El formato emite objetos como:
+      {"type":"system","subtype":"init",...}
+      {"type":"assistant","message":{"content":[{"type":"text","text":...},
+          {"type":"tool_use","name":...,"input":...}]}}
+      {"type":"user","message":{"content":[{"type":"tool_result","content":...}]}}
+      {"type":"result","subtype":"success","total_cost_usd":...,"duration_ms":...}
+
+    Si la línea no es JSON válido, se devuelve tal cual.
+    """
+    try:
+        obj = json.loads(linea)
+    except json.JSONDecodeError:
+        return [linea]
+
+    tipo = obj.get("type")
+    out: list[str] = []
+    if tipo == "system":
+        sub = obj.get("subtype") or ""
+        model = obj.get("model") or ""
+        session_id = (obj.get("session_id") or "")[:8]
+        out.append(f"[init] {sub} · model={model} · session={session_id}")
+    elif tipo == "assistant":
+        msg = obj.get("message") or {}
+        for b in msg.get("content") or []:
+            btype = b.get("type")
+            if btype == "text":
+                texto = (b.get("text") or "").strip()
+                if texto:
+                    for parr in _chunks(texto, 400):
+                        out.append(f"[asistente] {parr}")
+            elif btype == "tool_use":
+                nombre = b.get("name") or "?"
+                inp = b.get("input") or {}
+                resumen = _resumen_input(nombre, inp)
+                out.append(f"[tool_use] {nombre}({resumen})")
+            elif btype == "thinking":
+                pensamiento = (b.get("thinking") or "").strip()
+                if pensamiento:
+                    out.append(f"[thinking] {pensamiento[:200]}")
+    elif tipo == "user":
+        msg = obj.get("message") or {}
+        for b in msg.get("content") or []:
+            if b.get("type") == "tool_result":
+                is_err = b.get("is_error")
+                contenido = b.get("content")
+                if isinstance(contenido, list):
+                    texto = " ".join(
+                        (c.get("text", "") if isinstance(c, dict) else str(c))
+                        for c in contenido
+                    )
+                else:
+                    texto = str(contenido or "")
+                marca = "error" if is_err else "ok"
+                out.append(f"[tool_result:{marca}] {texto[:300].replace(chr(10), ' ')}")
+    elif tipo == "result":
+        coste = obj.get("total_cost_usd")
+        dur = obj.get("duration_ms")
+        turns = obj.get("num_turns")
+        sub = obj.get("subtype") or ""
+        partes = [f"result:{sub}"]
+        if turns is not None:
+            partes.append(f"turns={turns}")
+        if dur is not None:
+            partes.append(f"{dur/1000:.1f}s")
+        if coste is not None:
+            partes.append(f"{coste:.4f} USD")
+        out.append("[" + " · ".join(partes) + "]")
+        texto_res = obj.get("result")
+        if texto_res:
+            for parr in _chunks(str(texto_res).strip(), 400):
+                out.append(f"[resumen final] {parr}")
+    else:
+        # Tipo desconocido: volcar resumido.
+        out.append(f"[{tipo or 'unknown'}] {linea[:200]}")
+    return out
+
+
+def _chunks(s: str, n: int) -> list[str]:
+    if not s:
+        return []
+    return [s[i : i + n] for i in range(0, len(s), n)]
+
+
+def _resumen_input(nombre: str, inp: dict) -> str:
+    """Muestra los args más útiles sin volcar un capítulo entero."""
+    if not inp:
+        return ""
+    if nombre in ("Read", "Edit", "Write", "MultiEdit", "NotebookEdit"):
+        ruta = inp.get("file_path") or inp.get("path") or ""
+        return ruta
+    if nombre == "Bash":
+        cmd = (inp.get("command") or "").replace("\n", " ")
+        return cmd[:120]
+    if nombre in ("Grep", "Glob"):
+        return (inp.get("pattern") or inp.get("path") or "")[:120]
+    if nombre.startswith("mcp__"):
+        return ", ".join(f"{k}={_trunc(v)}" for k, v in inp.items() if k != "content")
+    # Fallback: primeros 3 pares k=v
+    partes = []
+    for k, v in list(inp.items())[:3]:
+        partes.append(f"{k}={_trunc(v)}")
+    return ", ".join(partes)
+
+
+def _trunc(v, n: int = 60) -> str:
+    s = str(v)
+    if len(s) > n:
+        return s[:n - 3] + "..."
+    return s
 
 
 def serializar(sesion: SesionCC, limite_lineas: int = 500) -> dict:
