@@ -100,8 +100,11 @@ def _run_session(sesion: SesionCC, permitir_cerrados: bool) -> None:
     args = [
         "claude",
         "--print",
+        # bypassPermissions evita diálogos interactivos. La seguridad la
+        # garantizan los hooks de `.claude/settings.json` (bloquean .env,
+        # capítulos cerrados, y filtran comandos Bash peligrosos via `deny`).
         "--permission-mode",
-        "acceptEdits",
+        "bypassPermissions",
     ]
     if sesion.modelo:
         args.extend(["--model", sesion.modelo])
