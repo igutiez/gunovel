@@ -16,7 +16,49 @@ from pathlib import Path
 
 log = logging.getLogger("novela_app.git")
 
-# Locks por proyecto (clave: path absoluto como string).
+
+def _encontrar_repo_raiz(ruta: Path) -> Path | None:
+    """Sube por los ancestros buscando un directorio con .git/.
+
+    Devuelve el path del repo o None si no hay ninguno.
+    """
+    actual = ruta.resolve()
+    while True:
+        if (actual / ".git").exists():
+            return actual
+        if actual.parent == actual:
+            return None
+        actual = actual.parent
+
+
+def _resolver_repo(proyecto_ruta: Path) -> tuple[Path, Path]:
+    """Devuelve (repo_root, ruta_del_proyecto_relativa_al_repo).
+
+    En modo monorepo (repo padre contiene al proyecto), el proyecto NO tiene
+    su propio .git. En modo legacy (proyecto tiene su .git), repo_root ==
+    proyecto_ruta y la ruta relativa es vacía.
+    """
+    repo = _encontrar_repo_raiz(proyecto_ruta)
+    if repo is None:
+        return proyecto_ruta, Path("")
+    if repo == proyecto_ruta.resolve():
+        return repo, Path("")
+    try:
+        rel = proyecto_ruta.resolve().relative_to(repo)
+    except ValueError:
+        return proyecto_ruta, Path("")
+    return repo, rel
+
+
+def _prefijar_paths(prefijo: Path, paths: list[str] | None) -> list[str] | None:
+    if not paths:
+        return paths
+    if str(prefijo) in ("", "."):
+        return paths
+    return [(prefijo / p).as_posix() for p in paths]
+
+
+# Locks por repo-raíz (clave: path absoluto como string).
 _locks: dict[str, threading.Lock] = {}
 _locks_guard = threading.Lock()
 
@@ -32,12 +74,15 @@ _push_thread_lock = threading.Lock()
 
 @contextmanager
 def proyecto_lock(proyecto_ruta: Path, timeout: float = 10.0):
-    key = str(proyecto_ruta.resolve())
+    # El lock siempre se toma sobre el repo raíz; en modo monorepo,
+    # dos proyectos distintos comparten el mismo repo y por tanto el lock.
+    repo, _ = _resolver_repo(proyecto_ruta)
+    key = str(repo.resolve())
     with _locks_guard:
         lock = _locks.setdefault(key, threading.Lock())
     adquirido = lock.acquire(timeout=timeout)
     if not adquirido:
-        raise RuntimeError(f"Timeout adquiriendo lock del proyecto {proyecto_ruta}")
+        raise RuntimeError(f"Timeout adquiriendo lock del repo {repo}")
     try:
         yield
     finally:
@@ -73,12 +118,31 @@ def init_repo(
     autor_email: str,
     remoto_url: str | None = None,
 ) -> None:
-    """Inicializa git en el proyecto, configura autor, primer commit.
+    """Inicializa git para un proyecto nuevo.
 
-    Si `remoto_url` se pasa (y no está vacío), configura el remoto origin y
-    prepara el tracking con main. No hace push inmediato (lo hará el siguiente
-    commit si auto_push está activo en la config del proyecto).
+    Modo monorepo: si ya existe un repo en un ancestro (p.ej. NOVELAS_ROOT
+    vive dentro de un repo), NO crea un .git/ propio. Sólo añade los
+    ficheros del proyecto al repo padre con un commit [SYS] Inicialización.
+
+    Modo legacy (proyecto aislado): crea su propio .git/ y opcionalmente el
+    remoto.
     """
+    repo, rel = _resolver_repo(proyecto_ruta)
+    if repo != proyecto_ruta.resolve():
+        # Monorepo: el repo padre ya existe.
+        with proyecto_lock(proyecto_ruta):
+            _run(["add", "--", rel.as_posix()], repo)
+            status = _run(["status", "--porcelain"], repo)
+            if status.stdout.strip():
+                _run(
+                    ["commit", "-m", f"[SYS] Inicialización del proyecto {rel.as_posix()}"],
+                    repo,
+                )
+        if _debe_auto_push(proyecto_ruta):
+            encolar_push(proyecto_ruta)
+        return
+
+    # Legacy: crear repo propio.
     with proyecto_lock(proyecto_ruta):
         _run(["init", "-b", "main"], proyecto_ruta)
         _run(["config", "user.name", autor_nombre], proyecto_ruta)
@@ -92,23 +156,34 @@ def init_repo(
 def commit_cambios(
     proyecto_ruta: Path, mensaje: str, paths: list[str] | None = None
 ) -> str | None:
-    """Añade y commitea los paths indicados (o todo si None). Devuelve el hash.
+    """Añade y commitea en el repo que contiene al proyecto.
 
-    Si la config del proyecto tiene `git.auto_push: true`, encola un push en
-    background tras el commit. No bloquea.
+    En monorepo, los paths (relativos al proyecto) se prefijan con la ruta
+    del proyecto respecto al repo para que `git add` funcione desde la raíz.
     """
-    with proyecto_lock(proyecto_ruta):
-        if paths:
-            _run(["add", "--", *paths], proyecto_ruta)
-        else:
-            _run(["add", "-A"], proyecto_ruta)
+    repo, rel = _resolver_repo(proyecto_ruta)
+    paths_rel = _prefijar_paths(rel, paths)
 
-        status = _run(["status", "--porcelain"], proyecto_ruta)
+    with proyecto_lock(proyecto_ruta):
+        if paths_rel:
+            _run(["add", "--", *paths_rel], repo)
+        else:
+            # -A sobre el proyecto entero en monorepo: sólo su subcarpeta.
+            if str(rel) not in ("", "."):
+                _run(["add", "-A", "--", rel.as_posix()], repo)
+            else:
+                _run(["add", "-A"], repo)
+
+        # Chequear si hay cambios en el sub-scope relevante.
+        estado_args = ["status", "--porcelain"]
+        if str(rel) not in ("", "."):
+            estado_args += ["--", rel.as_posix()]
+        status = _run(estado_args, repo)
         if not status.stdout.strip():
             return None
 
-        _run(["commit", "-m", mensaje], proyecto_ruta)
-        res = _run(["rev-parse", "HEAD"], proyecto_ruta)
+        _run(["commit", "-m", mensaje], repo)
+        res = _run(["rev-parse", "HEAD"], repo)
         commit_hash = res.stdout.strip()
 
     if _debe_auto_push(proyecto_ruta):
@@ -118,8 +193,31 @@ def commit_cambios(
 
 
 def _debe_auto_push(proyecto_ruta: Path) -> bool:
+    """Decide si tras un commit hay que encolar push.
+
+    Modo monorepo: lee `.gunovel.json` del repo raíz.
+    Modo legacy: lee `.novela-config.json` / `.libro-config.json` del proyecto.
+    """
     import json
 
+    repo, rel = _resolver_repo(proyecto_ruta)
+    if str(rel) not in ("", "."):
+        # Monorepo: config global en el repo padre.
+        cfg_path = repo / ".gunovel.json"
+        if not cfg_path.exists():
+            # Por defecto auto-push si hay remoto configurado.
+            r = _run(["remote", "get-url", "origin"], repo, check=False)
+            return bool(r.stdout.strip())
+        try:
+            cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+        except Exception:
+            return False
+        if not cfg.get("auto_push", True):
+            return False
+        r = _run(["remote", "get-url", "origin"], repo, check=False)
+        return bool(r.stdout.strip())
+
+    # Legacy: config por proyecto.
     cfg_path = proyecto_ruta / ".novela-config.json"
     if not cfg_path.exists():
         cfg_path = proyecto_ruta / ".libro-config.json"
@@ -136,9 +234,11 @@ def _debe_auto_push(proyecto_ruta: Path) -> bool:
 
 
 def ultimo_commit_de_fichero(proyecto_ruta: Path, ruta_rel: str) -> str | None:
+    repo, rel = _resolver_repo(proyecto_ruta)
+    path_repo = (rel / ruta_rel).as_posix() if str(rel) not in ("", ".") else ruta_rel
     res = _run(
-        ["log", "-n", "1", "--pretty=format:%h", "--", ruta_rel],
-        proyecto_ruta,
+        ["log", "-n", "1", "--pretty=format:%h", "--", path_repo],
+        repo,
         check=False,
     )
     hash_ = res.stdout.strip()
@@ -146,11 +246,19 @@ def ultimo_commit_de_fichero(proyecto_ruta: Path, ruta_rel: str) -> str | None:
 
 
 def git_status_info(proyecto_ruta: Path) -> dict:
-    """Resumen para /api/proyecto/<slug>/git_status."""
+    """Resumen para /api/proyecto/<slug>/git_status.
+
+    En monorepo la info refleja el repo padre, pero los commits se filtran
+    al subscope del proyecto cuando se solicita historial por ruta.
+    """
+    repo, rel = _resolver_repo(proyecto_ruta)
     last_commit = ""
     last_date = ""
     try:
-        last = _run(["log", "-n", "1", "--pretty=format:%h %cI"], proyecto_ruta, check=False)
+        log_args = ["log", "-n", "1", "--pretty=format:%h %cI"]
+        if str(rel) not in ("", "."):
+            log_args += ["--", rel.as_posix()]
+        last = _run(log_args, repo, check=False)
         if last.stdout.strip():
             partes = last.stdout.strip().split(" ", 1)
             last_commit = partes[0]
@@ -160,20 +268,20 @@ def git_status_info(proyecto_ruta: Path) -> dict:
 
     remoto_url = None
     try:
-        r = _run(["remote", "get-url", "origin"], proyecto_ruta, check=False)
+        r = _run(["remote", "get-url", "origin"], repo, check=False)
         remoto_url = r.stdout.strip() or None
     except GitError:
         pass
 
     commits_pendientes = 0
     if remoto_url:
-        r = _run(["rev-list", "--count", "origin/main..HEAD"], proyecto_ruta, check=False)
+        r = _run(["rev-list", "--count", "origin/main..HEAD"], repo, check=False)
         try:
             commits_pendientes = int(r.stdout.strip() or "0")
         except ValueError:
             commits_pendientes = 0
 
-    clave = str(proyecto_ruta.resolve())
+    clave = str(repo.resolve())
     with _push_state_lock:
         push_info = _push_state.get(clave, {})
 
@@ -198,16 +306,18 @@ def git_status_info(proyecto_ruta: Path) -> dict:
 
 
 def revert_head(proyecto_ruta: Path) -> str | None:
-    """Revierte el último commit. Devuelve el hash del nuevo commit de revert."""
+    """Revierte el último commit *del repo*. En monorepo afecta al monorepo."""
+    repo, _ = _resolver_repo(proyecto_ruta)
     with proyecto_lock(proyecto_ruta):
-        # git revert HEAD --no-edit crea un commit nuevo con los cambios invertidos.
-        res = _run(["log", "-n", "1", "--pretty=format:%s"], proyecto_ruta, check=False)
+        res = _run(["log", "-n", "1", "--pretty=format:%s"], repo, check=False)
         asunto_anterior = res.stdout.strip()
-        _run(["revert", "HEAD", "--no-edit"], proyecto_ruta)
-        r2 = _run(["rev-parse", "HEAD"], proyecto_ruta)
+        _run(["revert", "HEAD", "--no-edit"], repo)
+        r2 = _run(["rev-parse", "HEAD"], repo)
         nuevo_hash = r2.stdout.strip()
         log.info("Revertido commit '%s' → nuevo hash %s", asunto_anterior, nuevo_hash)
-        return nuevo_hash
+    if _debe_auto_push(proyecto_ruta):
+        encolar_push(proyecto_ruta)
+    return nuevo_hash
 
 
 # ---------------------------------------------------------------------------
@@ -219,18 +329,18 @@ def _push_worker() -> None:
         ruta: Path = _push_queue.get()
         if ruta is None:
             return
-        clave = str(ruta.resolve())
+        repo, _ = _resolver_repo(ruta)
+        clave = str(repo.resolve())
         try:
             with proyecto_lock(ruta, timeout=30.0):
-                # Sólo pushea si hay remoto configurado.
-                r = _run(["remote", "get-url", "origin"], ruta, check=False)
+                r = _run(["remote", "get-url", "origin"], repo, check=False)
                 if not r.stdout.strip():
                     _registrar_push(clave, error="sin remoto configurado")
                     continue
-                _run(["push", "-u", "origin", "main"], ruta)
+                _run(["push", "-u", "origin", "main"], repo)
                 _registrar_push(clave, error=None)
         except Exception as exc:  # noqa: BLE001
-            log.exception("Error en push de %s", ruta)
+            log.exception("Error en push de %s", repo)
             _registrar_push(clave, error=str(exc))
         finally:
             _push_queue.task_done()
@@ -263,11 +373,13 @@ def encolar_push(proyecto_ruta: Path) -> None:
 
 def historial_de_fichero(proyecto_ruta: Path, ruta_rel: str) -> list[dict]:
     """git log por fichero con formato estable."""
+    repo, rel = _resolver_repo(proyecto_ruta)
+    path_repo = (rel / ruta_rel).as_posix() if str(rel) not in ("", ".") else ruta_rel
     sep = "%x1f"
     fmt = sep.join(["%H", "%h", "%cI", "%an", "%s"])
     res = _run(
-        ["log", f"--pretty=format:{fmt}", "--", ruta_rel],
-        proyecto_ruta,
+        ["log", "--follow", f"--pretty=format:{fmt}", "--", path_repo],
+        repo,
         check=False,
     )
     versiones: list[dict] = []
@@ -291,7 +403,9 @@ def historial_de_fichero(proyecto_ruta: Path, ruta_rel: str) -> list[dict]:
 
 
 def contenido_en_commit(proyecto_ruta: Path, ruta_rel: str, commit: str) -> str:
-    res = _run(["show", f"{commit}:{ruta_rel}"], proyecto_ruta)
+    repo, rel = _resolver_repo(proyecto_ruta)
+    path_repo = (rel / ruta_rel).as_posix() if str(rel) not in ("", ".") else ruta_rel
+    res = _run(["show", f"{commit}:{path_repo}"], repo)
     return res.stdout
 
 
