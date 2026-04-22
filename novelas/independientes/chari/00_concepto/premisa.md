@@ -1,3 +1,3 @@
 # Premisa
 
-Una o dos frases: protagonista + objetivo + obstáculo + riesgo.
+Primera aproximación a la historia de Chari.
