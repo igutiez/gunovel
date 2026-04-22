@@ -46,7 +46,13 @@ class Config:
     MODELO_POR_DEFECTO = "claude-sonnet-4-6"
     MODELO_OPUS = "claude-opus-4-7"
     MODELO_HAIKU = "claude-haiku-4-5"
-    MAX_TOOL_CALLS_POR_TURNO = 5
+    # Límite de iteraciones de tool use por turno. La spec original decía 5 para
+    # prevenir bucles exploratorios tipo Claude Code. Subido a 15 porque los
+    # flujos reales (volcado de canon, revisión completa, redacción con
+    # lecturas previas) lo necesitan. Cada iteración puede ejecutar varios
+    # tool_use en paralelo, así que 15 no abre la puerta a bucles.
+    MAX_TOOL_CALLS_POR_TURNO = 15
+    MAX_TOKENS_OUTPUT = 16384
     MAX_CHARS_TOOL_RESULT = 8000
     VENTANA_HISTORIAL_MENSAJES = 50
     UMBRAL_RESUMIR_HISTORIAL = 40

@@ -287,7 +287,7 @@ def _llamar_api_con_retry(cliente, *, modelo, system, messages):
         try:
             return cliente.messages.create(
                 model=modelo,
-                max_tokens=4096,
+                max_tokens=Config.MAX_TOKENS_OUTPUT,
                 system=system,
                 tools=TOOL_SCHEMAS,
                 messages=messages,
