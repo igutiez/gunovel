@@ -1717,6 +1717,250 @@ Al final resume en 3-5 bullets qué mejoraste del principal y qué propagaste.`
     }
   }
 
+  // ------------------------------------------------------ Modo autónomo
+  const autonomo = {
+    overlay: null,
+    polling: false,
+    loopActivo: false,
+    log: [],
+  };
+
+  function abrirPanelAutonomo() {
+    if (!state.proyectoSlug) { alert("Selecciona un proyecto."); return; }
+    if (autonomo.overlay) { autonomo.overlay.remove(); autonomo.overlay = null; return; }
+    const div = document.createElement("div");
+    div.className = "autonomo-overlay";
+    div.innerHTML = `
+      <div class="autonomo-header">
+        <h2>🤖 Modo autónomo</h2>
+        <button class="autonomo-close" type="button">✕</button>
+      </div>
+      <div class="autonomo-body" id="autonomo-body"></div>
+      <div class="autonomo-footer">
+        <div class="autonomo-acciones" id="autonomo-acciones"></div>
+      </div>`;
+    document.body.appendChild(div);
+    autonomo.overlay = div;
+    div.querySelector(".autonomo-close").addEventListener("click", () => cerrarPanelAutonomo());
+    refrescarPanelAutonomo();
+  }
+
+  function cerrarPanelAutonomo() {
+    autonomo.loopActivo = false;
+    if (autonomo.overlay) { autonomo.overlay.remove(); autonomo.overlay = null; }
+  }
+
+  async function refrescarPanelAutonomo() {
+    if (!autonomo.overlay) return;
+    try {
+      const data = await api(`/api/proyecto/${slugURL(state.proyectoSlug)}/autonomo/estado`);
+      if (!data.activa) {
+        pintarConfiguracionInicial();
+      } else {
+        pintarPanelEjecucion(data);
+      }
+    } catch (e) {
+      document.getElementById("autonomo-body").innerHTML =
+        `<div class="empty-state">Error: ${escape(String(e.message || e))}</div>`;
+    }
+  }
+
+  function pintarConfiguracionInicial() {
+    const body = document.getElementById("autonomo-body");
+    body.innerHTML = `
+      <div class="autonomo-seccion">
+        <h3>Configuración inicial</h3>
+        <div class="autonomo-forma">
+          <label>Fase
+            <select id="auto-fase">
+              <option value="todo">Todo (concepción → revisión)</option>
+              <option value="concepcion">Concepción</option>
+              <option value="estructura">Estructura</option>
+              <option value="personajes">Personajes</option>
+              <option value="mundo">Mundo</option>
+              <option value="redaccion">Redacción</option>
+              <option value="revision">Revisión</option>
+            </select>
+          </label>
+          <label>Modelo
+            <select id="auto-modelo">
+              <option value="">Default del proyecto</option>
+              <option value="claude-haiku-4-5">Haiku · barato</option>
+              <option value="claude-sonnet-4-6">Sonnet · redacción</option>
+              <option value="claude-opus-4-7">Opus · máxima calidad</option>
+            </select>
+          </label>
+          <label>Presupuesto (€)
+            <input type="number" id="auto-presupuesto" value="5" step="0.5" min="0.5" max="200" />
+            <span class="ayuda">Hard cap. Al alcanzarlo, el loop se detiene.</span>
+          </label>
+          <label>Tope de cola de propuestas
+            <input type="number" id="auto-cola" value="15" min="5" max="50" />
+            <span class="ayuda">Si la cola de propuestas pendientes de aprobar llega aquí, pausa.</span>
+          </label>
+        </div>
+      </div>
+      <div class="autonomo-seccion">
+        <h3>Qué hace el modo autónomo</h3>
+        <div class="autonomo-log" style="max-height:none">La IA lee el plan en <code>05_control/plan_autonomo.md</code>, elige la siguiente tarea, la ejecuta, actualiza el plan y avanza. Pausa sola cuando: hay preguntas para ti, la cola de propuestas se llena, el presupuesto se agota, detecta un bucle, o ha terminado la fase.
+
+Antes de arrancar, opcionalmente pon un párrafo de tu prosa en <code>05_control/golden_reference.md</code> como referencia de voz.</div>
+      </div>`;
+
+    document.getElementById("autonomo-acciones").innerHTML = "";
+    const btn = document.createElement("button");
+    btn.textContent = "Iniciar ejecución";
+    btn.addEventListener("click", iniciarAutonomo);
+    document.getElementById("autonomo-acciones").appendChild(btn);
+  }
+
+  async function iniciarAutonomo() {
+    const body = {
+      fase: document.getElementById("auto-fase").value,
+      modelo: document.getElementById("auto-modelo").value || undefined,
+      presupuesto_eur: parseFloat(document.getElementById("auto-presupuesto").value) || 5,
+      max_propuestas_cola: parseInt(document.getElementById("auto-cola").value, 10) || 15,
+    };
+    try {
+      await api(`/api/proyecto/${slugURL(state.proyectoSlug)}/autonomo/iniciar`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+      autonomo.loopActivo = true;
+      autonomo.log = [];
+      await refrescarPanelAutonomo();
+      arrancarLoop();
+    } catch (e) {
+      alert("No se pudo iniciar: " + (e.message || e));
+    }
+  }
+
+  function pintarPanelEjecucion(data) {
+    const body = document.getElementById("autonomo-body");
+    const e = data.ejecucion;
+    const pct = e.presupuesto_eur ? Math.min(100, 100 * e.coste_acumulado_eur / e.presupuesto_eur) : 0;
+    const estadoClase = {
+      "ejecutando": "",
+      "pausado": "pausado",
+      "esperando_autor": "pausado",
+      "esperando_revision": "pausado",
+      "detenido": "error",
+      "error_presupuesto": "error",
+      "error_stuck": "error",
+      "terminado": "terminado",
+    }[e.estado] || "";
+
+    body.innerHTML = `
+      <div class="autonomo-estado ${estadoClase}">
+        <span class="tag">${e.estado}</span>
+        <b> · fase ${e.fase}</b>
+        ${e.razon_pausa ? `<div style="margin-top:4px">${escape(e.razon_pausa)}</div>` : ""}
+        <div class="autonomo-metricas">
+          <div><b>${e.coste_acumulado_eur.toFixed(4)}&nbsp;€</b><span>de ${e.presupuesto_eur.toFixed(2)}&nbsp;€ (${pct.toFixed(0)}%)</span></div>
+          <div><b>${e.pasos_ejecutados}</b><span>pasos ejecutados</span></div>
+          <div><b>${data.cola_propuestas}</b><span>propuestas en cola</span></div>
+        </div>
+      </div>
+      ${data.preguntas_pendientes && data.preguntas_pendientes.length ? `
+        <div class="autonomo-seccion">
+          <h3>Preguntas del autor (${data.preguntas_pendientes.length})</h3>
+          <div id="preguntas-lista"></div>
+        </div>` : ""}
+      <div class="autonomo-seccion">
+        <h3>Actividad reciente</h3>
+        <div class="autonomo-log" id="auto-log">${autonomo.log.slice(-20).map((l) => escape(l)).join("\n") || "(sin actividad aún)"}</div>
+      </div>`;
+
+    if (data.preguntas_pendientes && data.preguntas_pendientes.length) {
+      const cont = document.getElementById("preguntas-lista");
+      for (const p of data.preguntas_pendientes) {
+        const d = document.createElement("div");
+        d.className = "autonomo-pregunta";
+        d.innerHTML = `
+          <div class="p">${escape(p.pregunta)}</div>
+          ${p.contexto ? `<div class="c">${escape(p.contexto)}</div>` : ""}
+          <textarea rows="2" placeholder="Respuesta..."></textarea>
+          <button>Responder y reanudar</button>`;
+        const ta = d.querySelector("textarea");
+        d.querySelector("button").addEventListener("click", async () => {
+          const r = ta.value.trim();
+          if (!r) return;
+          await api(
+            `/api/proyecto/${slugURL(state.proyectoSlug)}/autonomo/preguntas/${p.id}/responder`,
+            { method: "POST", body: JSON.stringify({ respuesta: r }) }
+          );
+          autonomo.loopActivo = true;
+          await refrescarPanelAutonomo();
+          arrancarLoop();
+        });
+        cont.appendChild(d);
+      }
+    }
+
+    // Acciones del footer según estado
+    const acc = document.getElementById("autonomo-acciones");
+    acc.innerHTML = "";
+    if (e.estado === "ejecutando") {
+      const p = document.createElement("button"); p.className = "pausar"; p.textContent = "Pausar";
+      p.addEventListener("click", async () => {
+        autonomo.loopActivo = false;
+        await api(`/api/proyecto/${slugURL(state.proyectoSlug)}/autonomo/pausar`, { method: "POST", body: "{}" });
+        await refrescarPanelAutonomo();
+      });
+      acc.appendChild(p);
+    } else if (["pausado", "esperando_revision"].includes(e.estado)) {
+      const r = document.createElement("button"); r.textContent = "Reanudar";
+      r.addEventListener("click", async () => {
+        try {
+          await api(`/api/proyecto/${slugURL(state.proyectoSlug)}/autonomo/reanudar`, { method: "POST", body: "{}" });
+          autonomo.loopActivo = true;
+          await refrescarPanelAutonomo();
+          arrancarLoop();
+        } catch (e) { alert(e.message || e); }
+      });
+      acc.appendChild(r);
+    } else if (e.estado === "esperando_autor") {
+      const info = document.createElement("button");
+      info.textContent = "Responde las preguntas para reanudar";
+      info.disabled = true;
+      acc.appendChild(info);
+    }
+    const d = document.createElement("button"); d.className = "detener"; d.textContent = "Detener";
+    d.addEventListener("click", async () => {
+      if (!confirm("Detener la ejecución autónoma? No se puede reanudar después.")) return;
+      autonomo.loopActivo = false;
+      await api(`/api/proyecto/${slugURL(state.proyectoSlug)}/autonomo/detener`, { method: "POST", body: "{}" });
+      await refrescarPanelAutonomo();
+    });
+    acc.appendChild(d);
+  }
+
+  async function arrancarLoop() {
+    while (autonomo.loopActivo) {
+      try {
+        const resp = await api(
+          `/api/proyecto/${slugURL(state.proyectoSlug)}/autonomo/paso`,
+          { method: "POST", body: "{}" }
+        );
+        const snippet = (resp.mensaje_asistente || "").split("\n").slice(0, 2).join(" · ").slice(0, 200);
+        autonomo.log.push(`· paso ${resp.ejecucion.pasos_ejecutados} · ${resp.coste_paso_eur.toFixed(4)}€ · props:${resp.propuestas_nuevas} preg:${resp.preguntas_nuevas}${snippet ? " · " + snippet : ""}`);
+        await refrescarPanelAutonomo();
+        if (resp.pausado) {
+          autonomo.loopActivo = false;
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 1500));
+      } catch (e) {
+        autonomo.log.push("· ERROR: " + (e.message || e));
+        autonomo.loopActivo = false;
+        await refrescarPanelAutonomo();
+        break;
+      }
+    }
+    // Refrescar árbol y git tras ronda autónoma (pueden haberse aplicado propuestas vía fichero).
+    try { await Promise.all([cargarArbol(), cargarGitStatus()]); } catch (_) { /* ignore */ }
+  }
+
   // ----------------------------------------------------------------- Init
   document.addEventListener("DOMContentLoaded", async () => {
     inicializarEditor();
@@ -1733,6 +1977,7 @@ Al final resume en 3-5 bullets qué mejoraste del principal y qué propagaste.`
       window.location = `/api/proyecto/${slugURL(state.proyectoSlug)}/export/epub`;
     });
     document.getElementById("btn-configurar-remoto").addEventListener("click", abrirModalRemoto);
+    document.getElementById("btn-autonomo").addEventListener("click", abrirPanelAutonomo);
     document.getElementById("btn-deshacer").addEventListener("click", async () => {
       if (!state.proyectoSlug) return;
       if (!confirm("Revertir el último commit del proyecto activo? Se crea un commit nuevo que invierte los cambios.")) return;

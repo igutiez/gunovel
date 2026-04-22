@@ -59,6 +59,42 @@ CREATE TABLE IF NOT EXISTS mensajes_chat (
 );
 CREATE INDEX IF NOT EXISTS idx_mensajes_conv ON mensajes_chat(conversacion_id);
 
+CREATE TABLE IF NOT EXISTS ejecuciones_autonomo (
+    id TEXT PRIMARY KEY,
+    proyecto_slug TEXT NOT NULL,
+    estado TEXT NOT NULL,
+    fase TEXT,
+    modelo TEXT,
+    presupuesto_eur REAL NOT NULL,
+    coste_acumulado_eur REAL NOT NULL DEFAULT 0,
+    inicio TEXT NOT NULL,
+    fin TEXT,
+    pausa_hasta TEXT,
+    razon_pausa TEXT,
+    conversacion_id TEXT,
+    golden_reference_ruta TEXT,
+    max_propuestas_cola INTEGER DEFAULT 20,
+    pasos_ejecutados INTEGER DEFAULT 0,
+    firma_ultimas_tools TEXT,
+    ultima_actividad TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_ejec_proyecto ON ejecuciones_autonomo(proyecto_slug, estado);
+
+CREATE TABLE IF NOT EXISTS preguntas_autor (
+    id TEXT PRIMARY KEY,
+    ejecucion_id TEXT NOT NULL,
+    proyecto_slug TEXT NOT NULL,
+    timestamp TEXT NOT NULL,
+    pregunta TEXT NOT NULL,
+    contexto TEXT,
+    prioridad TEXT NOT NULL,
+    respuesta TEXT,
+    respondida_en TEXT,
+    FOREIGN KEY (ejecucion_id) REFERENCES ejecuciones_autonomo(id)
+);
+CREATE INDEX IF NOT EXISTS idx_pregs_ejec ON preguntas_autor(ejecucion_id);
+CREATE INDEX IF NOT EXISTS idx_pregs_proy ON preguntas_autor(proyecto_slug, respuesta);
+
 CREATE TABLE IF NOT EXISTS propuestas (
     id TEXT PRIMARY KEY,
     tipo TEXT NOT NULL,

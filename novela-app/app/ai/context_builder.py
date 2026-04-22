@@ -35,6 +35,8 @@ def contexto_capa1(proyecto: Proyecto) -> dict:
         estilo_canon = _leer_si_existe(proyecto.canon_ruta / "estilo.md")
         reglas_canon = _leer_si_existe(proyecto.canon_ruta / "reglas_universo.md")
         cronologia_canon = _leer_si_existe(proyecto.canon_ruta / "cronologia_saga.md")
+    golden_reference = _leer_si_existe(base / "05_control" / "golden_reference.md")
+    feedback_autor = _leer_si_existe(base / "05_control" / "feedback_autor.md")
 
     # Combinamos estilo canon + estilo libro (canon primero).
     estilo_partes = []
@@ -53,6 +55,8 @@ def contexto_capa1(proyecto: Proyecto) -> dict:
         "personajes_resumen": _resumen_personajes(proyecto),
         "reglas_universo": reglas_canon,
         "cronologia_saga": cronologia_canon,
+        "golden_reference": golden_reference,
+        "feedback_autor": feedback_autor,
     }
 
 

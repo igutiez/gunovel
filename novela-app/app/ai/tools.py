@@ -87,6 +87,30 @@ TOOL_SCHEMAS: list[dict] = [
         },
     },
     {
+        "name": "resumen_canon_actual",
+        "description": (
+            "Devuelve un resumen compacto del canon del proyecto: premisa en una "
+            "frase, sinopsis en 3-4 líneas, lista de personajes principales con "
+            "una línea cada uno, lugares principales, último capítulo aplicado y "
+            "slug del siguiente según orden.json. Úsalo al inicio de un turno "
+            "autónomo para no tener que leer 20 ficheros por separado."
+        ),
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "ver_capitulos_adyacentes",
+        "description": (
+            "Devuelve el capítulo anterior completo y la entrada de escaleta del "
+            "siguiente (si existe), dado un slug de capítulo. Útil para mantener "
+            "cohesión narrativa al redactar."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"slug": {"type": "string"}},
+            "required": ["slug"],
+        },
+    },
+    {
         "name": "auditar_capitulo",
         "description": (
             "Ejecuta auditoría editorial determinista (sin IA) sobre un capítulo "
@@ -369,6 +393,168 @@ def _tool_verificar(args: dict, proyecto: Proyecto) -> dict:
     return _verificar(proyecto, ambito)
 
 
+def _tool_resumen_canon(args: dict, proyecto: Proyecto) -> dict:
+    base = proyecto.ruta
+    premisa = _leer_primera_linea(base / "00_concepto" / "premisa.md")
+    sinopsis_full = _leer_plano(base / "00_concepto" / "sinopsis.md")
+    sinopsis = "\n".join(sinopsis_full.splitlines()[:6]) if sinopsis_full else None
+
+    personajes = []
+    dir_p = base / "01_personajes"
+    if dir_p.exists():
+        for md in sorted(dir_p.glob("*.md")):
+            try:
+                parsed = parse_fichero(md)
+            except Exception:
+                continue
+            rol = (parsed["metadata"] or {}).get("rol", "")
+            if rol not in ("principal", "secundario"):
+                continue
+            personajes.append(
+                {
+                    "slug": md.stem,
+                    "titulo": parsed["title"] or md.stem,
+                    "rol": rol,
+                    "pitch": _primera_linea_no_titulo(parsed["content"] or ""),
+                }
+            )
+
+    lugares = []
+    dir_l = base / "02_mundo"
+    if dir_l.exists():
+        for md in sorted(dir_l.glob("*.md")):
+            if md.stem in ("worldbuilding", "glosario", "mapa"):
+                continue
+            try:
+                parsed = parse_fichero(md)
+            except Exception:
+                continue
+            lugares.append(
+                {
+                    "slug": md.stem,
+                    "titulo": parsed["title"] or md.stem,
+                    "pitch": _primera_linea_no_titulo(parsed["content"] or ""),
+                }
+            )
+
+    orden = leer_orden(proyecto)
+    etiquetas = numerar_capitulos(orden)
+    slugs = list(etiquetas.keys())
+    ultimo_redactado: str | None = None
+    siguiente: str | None = None
+    for s in reversed(slugs):
+        md = base / "04_capitulos" / f"{s}.md"
+        if not md.exists():
+            continue
+        try:
+            parsed = parse_fichero(md)
+        except Exception:
+            continue
+        estado = (parsed["metadata"] or {}).get("estado", "")
+        if estado and estado != "esqueleto":
+            ultimo_redactado = s
+            idx = slugs.index(s)
+            if idx + 1 < len(slugs):
+                siguiente = slugs[idx + 1]
+            break
+    if ultimo_redactado is None and slugs:
+        siguiente = slugs[0]
+
+    return {
+        "premisa": premisa,
+        "sinopsis_resumen": sinopsis,
+        "personajes_principales": personajes,
+        "lugares_principales": lugares,
+        "total_capitulos_en_orden": len(slugs),
+        "ultimo_redactado": ultimo_redactado,
+        "siguiente_a_redactar": siguiente,
+        "tiene_canon_saga": bool(proyecto.canon_ruta),
+    }
+
+
+def _tool_capitulos_adyacentes(args: dict, proyecto: Proyecto) -> dict:
+    slug = args.get("slug") or ""
+    orden = leer_orden(proyecto)
+    etiquetas = numerar_capitulos(orden)
+    slugs = list(etiquetas.keys())
+    if slug not in slugs:
+        raise ToolError(f"Capítulo '{slug}' no está en orden.json.")
+    idx = slugs.index(slug)
+    anterior_slug = slugs[idx - 1] if idx > 0 else None
+    siguiente_slug = slugs[idx + 1] if idx + 1 < len(slugs) else None
+
+    def _cap_full(s: str | None):
+        if s is None:
+            return None
+        md = proyecto.ruta / "04_capitulos" / f"{s}.md"
+        if not md.exists():
+            return {"slug": s, "existe": False}
+        parsed = parse_fichero(md)
+        return {
+            "slug": s,
+            "existe": True,
+            "titulo": parsed["title"],
+            "metadata": parsed["metadata"],
+            "content": parsed["content"],
+        }
+
+    def _cap_escaleta(s: str | None):
+        if s is None:
+            return None
+        escaleta = _leer_plano(proyecto.ruta / "03_estructura" / "escaleta.md")
+        if not escaleta:
+            return {"slug": s, "escaleta": None}
+        # Localizar sección "### <slug>" o "## Cap NN"; fallback: devolver todo el cuerpo.
+        pat = re.compile(rf"^#{{1,6}}\s+.*\b{re.escape(s)}\b.*$", re.MULTILINE | re.IGNORECASE)
+        m = pat.search(escaleta)
+        if not m:
+            return {"slug": s, "escaleta": None}
+        resto = escaleta[m.start():]
+        fin = re.search(r"\n#{1,6}\s", resto[1:])
+        bloque = resto[: (fin.start() + 1) if fin else len(resto)]
+        return {"slug": s, "escaleta": bloque.strip()}
+
+    return {
+        "actual": _cap_escaleta(slug),
+        "anterior": _cap_full(anterior_slug),
+        "siguiente": _cap_escaleta(siguiente_slug),
+    }
+
+
+def _leer_primera_linea(ruta) -> str | None:
+    if not ruta.exists():
+        return None
+    try:
+        parsed = parse_fichero(ruta)
+    except Exception:
+        return None
+    return _primera_linea_no_titulo(parsed["content"] or "")
+
+
+def _leer_plano(ruta) -> str | None:
+    if not ruta.exists():
+        return None
+    try:
+        parsed = parse_fichero(ruta)
+    except Exception:
+        return None
+    return parsed["content"]
+
+
+def _primera_linea_no_titulo(contenido: str) -> str:
+    import re as _re
+
+    for linea in contenido.splitlines():
+        l = linea.strip()
+        if not l or l.startswith("#") or l.startswith("-"):
+            continue
+        return l if len(l) <= 180 else l[:177] + "..."
+    return ""
+
+
+import re  # noqa: E402
+
+
 def _tool_auditar(args: dict, proyecto: Proyecto) -> dict:
     from .auditoria import auditar
 
@@ -535,6 +721,8 @@ _HANDLERS = {
     "consultar_grafo_relaciones": _tool_grafo,
     "obtener_info_capitulo": _tool_info_capitulo,
     "verificar_coherencia": _tool_verificar,
+    "resumen_canon_actual": _tool_resumen_canon,
+    "ver_capitulos_adyacentes": _tool_capitulos_adyacentes,
     "auditar_capitulo": _tool_auditar,
     "leer_canon_saga": _tool_leer_canon,
     "modificar_fichero": _tool_modificar_fichero,

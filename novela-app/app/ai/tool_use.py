@@ -75,6 +75,20 @@ def _construir_bloques_sistema(proyecto: Proyecto, ruta_activa: str | None) -> l
         extras.append(f"## Tesis\n{capa1['tesis']}")
     if capa1.get("sinopsis"):
         extras.append(f"## Sinopsis\n{capa1['sinopsis']}")
+    if capa1.get("golden_reference"):
+        extras.append(
+            "## Referencia de voz (golden_reference.md)\n"
+            "Este es el tono al que el autor quiere que se acerque la prosa. "
+            "Úsalo como brújula, no como texto a copiar.\n\n"
+            + capa1["golden_reference"]
+        )
+    if capa1.get("feedback_autor"):
+        extras.append(
+            "## Feedback del autor (feedback_autor.md)\n"
+            "Correcciones previas que el autor ha hecho. NO repitas estos "
+            "errores.\n\n"
+            + capa1["feedback_autor"]
+        )
 
     # Capa 1: cache TTL 1h (amortiza cuando hay varias conversaciones en la sesión).
     bloques: list[dict] = [

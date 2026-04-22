@@ -54,6 +54,7 @@ def create_app() -> Flask:
     from .versioning.routes import bp as versioning_bp
     from .audit.routes import bp as audit_bp
     from .ai.routes import bp as ai_bp
+    from .autonomo.routes import bp as autonomo_bp
     from .main.routes import bp as main_bp
 
     app.register_blueprint(auth_bp)
@@ -61,6 +62,7 @@ def create_app() -> Flask:
     app.register_blueprint(versioning_bp)
     app.register_blueprint(audit_bp)
     app.register_blueprint(ai_bp)
+    app.register_blueprint(autonomo_bp)
     app.register_blueprint(main_bp)
 
     @app.route("/")
