@@ -160,9 +160,13 @@ def commit_cambios(
 
     En monorepo, los paths (relativos al proyecto) se prefijan con la ruta
     del proyecto respecto al repo para que `git add` funcione desde la raíz.
+    El subject del commit también se prefija con el slug del proyecto para
+    que un `git log` mezclado siga siendo legible.
     """
     repo, rel = _resolver_repo(proyecto_ruta)
     paths_rel = _prefijar_paths(rel, paths)
+    if str(rel) not in ("", "."):
+        mensaje = _prefijar_mensaje_con_proyecto(mensaje, rel)
 
     with proyecto_lock(proyecto_ruta):
         if paths_rel:
@@ -190,6 +194,30 @@ def commit_cambios(
         encolar_push(proyecto_ruta)
 
     return commit_hash
+
+
+def _slug_desde_rel(rel: Path) -> str:
+    """Extrae el slug del proyecto a partir de su ruta relativa al repo."""
+    partes = rel.parts
+    if len(partes) >= 3 and partes[0] == "novelas" and partes[1] == "independientes":
+        return partes[2]
+    if len(partes) >= 4 and partes[0] == "novelas" and partes[1] == "sagas":
+        return f"{partes[2]}/{partes[3]}"
+    return partes[-1] if partes else ""
+
+
+def _prefijar_mensaje_con_proyecto(mensaje: str, rel: Path) -> str:
+    """Transforma '[IA] foo.md: motivo' en '[IA] <slug>/foo.md: motivo'."""
+    import re
+
+    slug = _slug_desde_rel(rel)
+    if not slug:
+        return mensaje
+    m = re.match(r"^(\[[A-Z]+\])\s+(.+?)(:\s.*)$", mensaje, flags=re.DOTALL)
+    if m:
+        tag, ruta_interna, resto = m.groups()
+        return f"{tag} {slug}/{ruta_interna}{resto}"
+    return f"{mensaje} ({slug})"
 
 
 def _debe_auto_push(proyecto_ruta: Path) -> bool:
