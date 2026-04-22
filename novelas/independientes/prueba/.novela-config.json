@@ -1,0 +1,14 @@
+{
+  "tipo": "novela",
+  "nombre": "Novela de prueba",
+  "slug": "prueba",
+  "creado": "2026-04-21T18:02:34.911896+00:00",
+  "modelo_por_defecto": "claude-sonnet-4-6",
+  "modelo_para_revision_editorial": "claude-opus-4-7",
+  "estilo_resumen": "",
+  "idioma": "es",
+  "git": {
+    "remoto_url": "",
+    "auto_push": false
+  }
+}

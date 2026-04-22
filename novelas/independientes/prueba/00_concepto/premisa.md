@@ -1,0 +1,3 @@
+# Premisa
+
+Anxo Seoane lleva veinte años solo en el faro de Punta Corveira, en la Costa da Morte gallega, custodiando un secreto que el pueblo entero ha acordado callar: la noche en que un barco naufragó y nadie movió un dedo para salvar a su tripulación. Cuando Marta Souto, periodista de investigación llegada desde Vigo, se instala en la única pensión de Lourido con la excusa de escribir un reportaje sobre faros en desuso, Anxo comprende que alguien ha hablado por fin. Lo que ninguno de los dos sabe todavía es que el silencio del pueblo no protege solo una culpa colectiva: protege también a los vivos de alguien que no debería seguir siéndolo.
