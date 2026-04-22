@@ -168,6 +168,7 @@
           e.preventDefault();
           mostrarMenuContextual(e.clientX, e.clientY, [
             { texto: "Abrir", accion: () => abrirFichero(f.ruta) },
+            { texto: "Mejorar con IA (propaga al canon)", accion: () => accionMejorarConIA(f.ruta) },
             { texto: "Ver historial", accion: () => accionVerHistorial(f.ruta) },
             { texto: "Renombrar", accion: () => accionRenombrar(f.ruta) },
             { texto: "Borrar", peligro: true, accion: () => accionBorrar(f.ruta) },
@@ -1522,6 +1523,152 @@ No expliques todo en el chat; que el diff hable. Al final resume en 3-5 bullets 
   function accionVerHistorial(ruta) {
     state.rutaActiva = ruta;
     cambiarModo("historial");
+  }
+
+  function accionMejorarConIA(ruta) {
+    if (!state.proyectoSlug) return alert("Selecciona un proyecto.");
+    cambiarModo("editor");
+    const input = document.getElementById("chat-input");
+    input.value = promptMejorarDocumento(ruta);
+    enviarMensajeChat();
+  }
+
+  function tipoDocumento(ruta) {
+    if (ruta.startsWith("04_capitulos/")) return "capitulo";
+    if (ruta.startsWith("01_personajes/")) return "ficha_personaje";
+    if (ruta.startsWith("02_mundo/")) {
+      const slug = ruta.split("/").pop().replace(/\.md$/, "");
+      if (["worldbuilding", "glosario", "mapa"].includes(slug)) return "mundo_general";
+      return "ficha_lugar";
+    }
+    const tabla = {
+      "03_estructura/actos.md": "actos",
+      "03_estructura/escaleta.md": "escaleta",
+      "03_estructura/relaciones.md": "relaciones",
+      "03_estructura/cronologia.md": "cronologia",
+      "03_estructura/pov.md": "pov",
+      "05_control/estilo.md": "estilo",
+      "05_control/raccord.md": "raccord",
+      "05_control/bitacora.md": "bitacora",
+      "00_concepto/premisa.md": "premisa",
+      "00_concepto/sinopsis.md": "sinopsis",
+      "00_concepto/tesis.md": "tesis",
+      "06_revision/plan_correcciones.md": "plan_correcciones",
+      "06_revision/notas_editoriales.md": "notas_editoriales",
+    };
+    return tabla[ruta] || "generico";
+  }
+
+  function guiaPropagacion(tipo) {
+    const g = {
+      capitulo: [
+        "03_estructura/escaleta.md (verificar que la entrada del cap sigue fiel)",
+        "03_estructura/relaciones.md (si aparecen personajes/lugares nuevos)",
+        "05_control/raccord.md (si se siembran detalles que deben persistir)",
+        "Fichas de personajes presentes (aparece_en, conocimiento, voz)",
+      ],
+      ficha_personaje: [
+        "03_estructura/relaciones.md (sección 'Por personaje')",
+        "05_control/raccord.md (rasgos físicos, tics verbales)",
+        "Capítulos listados en aparece_en (solo si contradicción grave)",
+      ],
+      ficha_lugar: [
+        "03_estructura/relaciones.md",
+        "05_control/raccord.md (detalles geográficos, atmósfera)",
+        "Capítulos listados en aparece_en (solo si contradicción)",
+      ],
+      mundo_general: [
+        "Fichas de lugares (si cambian reglas del mundo)",
+        "05_control/raccord.md",
+      ],
+      actos: [
+        "03_estructura/escaleta.md (¿los caps siguen el nuevo arco?)",
+        "03_estructura/pov.md",
+        "00_concepto/sinopsis.md",
+      ],
+      escaleta: [
+        "03_estructura/actos.md (debe encajar con la macro)",
+        "03_estructura/relaciones.md",
+        "03_estructura/cronologia.md",
+      ],
+      relaciones: [
+        "Fichas de personajes (si hay inconsistencia)",
+        "05_control/raccord.md",
+      ],
+      cronologia: [
+        "Fichas de personajes (aparece_en)",
+        "03_estructura/escaleta.md",
+      ],
+      pov: [
+        "03_estructura/escaleta.md (las asignaciones deben encajar)",
+        "Cabeceras YAML de capítulos (solo si contradicción clara con pov.md)",
+      ],
+      estilo: [
+        "05_control/raccord.md",
+        "05_control/bitacora.md",
+      ],
+      raccord: [
+        "Fichas de personajes y lugares (rasgos físicos)",
+        "Capítulos afectados (solo si contradicción grave)",
+      ],
+      bitacora: [
+        "No propaga: es registro histórico, no canon vivo.",
+      ],
+      premisa: [
+        "00_concepto/sinopsis.md",
+        "00_concepto/tesis.md",
+        "03_estructura/actos.md",
+      ],
+      sinopsis: [
+        "00_concepto/premisa.md",
+        "00_concepto/tesis.md",
+        "03_estructura/actos.md",
+        "03_estructura/escaleta.md",
+      ],
+      tesis: [
+        "00_concepto/premisa.md",
+        "00_concepto/sinopsis.md",
+        "05_control/estilo.md",
+      ],
+      plan_correcciones: [
+        "No propaga: es lista de tareas. Puede actualizarse, no replica cambios.",
+      ],
+      notas_editoriales: [
+        "No propaga: es veredicto global. No modifica el canon directamente.",
+      ],
+      generico: [
+        "Usa listar_ficheros_proyecto y buscar_texto para localizar referencias a este documento.",
+      ],
+    };
+    return (g[tipo] || g.generico).map((l) => "   - " + l).join("\n");
+  }
+
+  function promptMejorarDocumento(ruta) {
+    const tipo = tipoDocumento(ruta);
+    return (
+`Mejora el documento **${ruta}** y propaga los cambios al resto del canon cuando sea necesario.
+
+Flujo:
+
+1. Lee \`${ruta}\` con leer_fichero.
+2. Lee los documentos vecinos que podrían depender (según el tipo de fichero):
+${guiaPropagacion(tipo)}
+3. Aplica juicio editorial al documento principal:
+   - Claridad y economía: ¿hay generalidades vacías, redundancia, pasos que sobran?
+   - Coherencia interna: ¿se contradice a sí mismo?
+   - Completud: ¿falta algo esencial que debería estar aquí?
+   - Respeto al canon ya establecido en los vecinos.
+4. Identifica qué vecinos deben actualizarse SI aplicamos el cambio del principal (propagación).
+5. Registra las propuestas con \`modificar_fichero\` o \`crear_fichero\`:
+   - UNA propuesta para ${ruta} con la versión mejorada.
+   - UNA propuesta por cada vecino afectado, con motivo claro (qué cambio del principal lo justifica). Si no hay vecinos afectados, no inventes cambios: deja el principal y ya.
+6. Reglas de seguridad:
+   - NO toques capítulos redactados (04_capitulos con estado borrador_v2/revisado/cerrado) a menos que haya contradicción grave con el nuevo canon. Si la hay, propón añadir una entrada en 06_revision/plan_correcciones.md con la tarea a revisar manualmente, en vez de reescribir prosa.
+   - NO elimines secciones completas sin explicarlo en el motivo.
+7. Si alguna decisión del autor está pendiente (nombre, número, fecha), deja marcador [PENDIENTE: ...] en vez de inventar.
+
+Al final resume en 3-5 bullets qué mejoraste del principal y qué propagaste.`
+    );
   }
 
   // ----------------------------------------------------------- Drag & drop
