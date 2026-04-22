@@ -1,0 +1,14 @@
+{
+  "tipo": "novela",
+  "nombre": "Lote 7",
+  "slug": "lote7",
+  "creado": "2026-04-22T18:27:31.624425+00:00",
+  "modelo_por_defecto": "claude-sonnet-4-6",
+  "modelo_para_revision_editorial": "claude-opus-4-7",
+  "estilo_resumen": "",
+  "idioma": "es",
+  "git": {
+    "remoto_url": "",
+    "auto_push": false
+  }
+}
