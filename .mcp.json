@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "gunovel": {
+      "type": "stdio",
+      "command": "/Users/igutiez/gunovel/novela-app/.venv/bin/python3",
+      "args": ["/Users/igutiez/gunovel/novela-app/mcp_server.py"],
+      "env": {}
+    }
+  }
+}

@@ -1717,6 +1717,185 @@ Al final resume en 3-5 bullets qué mejoraste del principal y qué propagaste.`
     }
   }
 
+  // ------------------------------------------------ Modo Claude Code (CLI)
+  const cc = { overlay: null, pollingTimer: null, sesionId: null };
+
+  function abrirPanelCC() {
+    if (!state.proyectoSlug) { alert("Selecciona un proyecto."); return; }
+    if (cc.overlay) { cerrarPanelCC(); return; }
+    const div = document.createElement("div");
+    div.className = "autonomo-overlay";
+    div.innerHTML = `
+      <div class="autonomo-header">
+        <h2>⚡ Claude Code</h2>
+        <button class="autonomo-close" type="button">✕</button>
+      </div>
+      <div class="autonomo-body" id="cc-body"></div>
+      <div class="autonomo-footer">
+        <div class="autonomo-acciones" id="cc-acciones"></div>
+      </div>`;
+    document.body.appendChild(div);
+    cc.overlay = div;
+    div.querySelector(".autonomo-close").addEventListener("click", cerrarPanelCC);
+    refrescarPanelCC();
+  }
+
+  function cerrarPanelCC() {
+    if (cc.pollingTimer) { clearInterval(cc.pollingTimer); cc.pollingTimer = null; }
+    if (cc.overlay) { cc.overlay.remove(); cc.overlay = null; }
+  }
+
+  async function refrescarPanelCC() {
+    if (!cc.overlay) return;
+    try {
+      const data = await api(`/api/proyecto/${slugURL(state.proyectoSlug)}/autonomo/cc/ultima`);
+      if (!data.activa || ["terminado","error","detenido"].includes(data.sesion.estado)) {
+        pintarCCConfiguracion(data.activa ? data.sesion : null);
+      } else {
+        cc.sesionId = data.sesion.id;
+        pintarCCEjecucion(data.sesion);
+      }
+    } catch (e) {
+      document.getElementById("cc-body").innerHTML =
+        `<div class="empty-state">Error: ${escape(String(e.message || e))}</div>`;
+    }
+  }
+
+  function pintarCCConfiguracion(ultima) {
+    const body = document.getElementById("cc-body");
+    const ejemplos = [
+      {t: "Redactar capítulo siguiente", p: "Redacta el siguiente capítulo según escaleta. Respeta golden_reference y feedback_autor si existen. Al terminar, ejecuta auditar_capitulo y corrige hallazgos graves."},
+      {t: "Pase editorial a capítulo activo", p: state.rutaActiva && state.rutaActiva.startsWith("04_capitulos/")
+        ? `Haz un pase editorial a ${state.rutaActiva.split("/").pop().replace(/\\.md$/,"")}: audítalo, detecta sobreexplicación/efectismo/voz, corrige. No reescribas si no hace falta.`
+        : "(abre un capítulo para esta opción)"},
+      {t: "Propagar canon desde fichero X", p: "Lee un documento que te indicaré, mejóralo y actualiza los demás del canon que dependen de él. Commitea cada cambio por separado."},
+      {t: "Construir biblia de personajes", p: "Crea fichas completas de personajes principales en 01_personajes/ a partir de la sinopsis y la escaleta. Coherente entre sí. Una por personaje."},
+      {t: "Continuar plan_autonomo.md", p: "Lee 05_control/plan_autonomo.md y ejecuta las tareas pendientes marcadas [ ]. Marca [x] al completar. Si no hay plan, créalo primero."},
+    ];
+    body.innerHTML = `
+      ${ultima ? `<div class="autonomo-estado ${ultima.estado === 'terminado' ? 'terminado' : 'error'}">
+        <span class="tag">${ultima.estado}</span>
+        <b> · última sesión</b>
+        ${ultima.error ? `<div style="margin-top:4px">${escape(ultima.error)}</div>` : ""}
+      </div>` : ""}
+      <div class="autonomo-seccion">
+        <h3>Tarea</h3>
+        <textarea id="cc-tarea" rows="5" style="width:100%;background:#0c1014;color:var(--text);border:1px solid var(--panel-border);padding:8px;font-size:13px;font-family:inherit;border-radius:3px"></textarea>
+        <div class="autonomo-forma" style="margin-top:8px">
+          <label>Modelo
+            <select id="cc-modelo">
+              <option value="">Default</option>
+              <option value="claude-haiku-4-5">Haiku</option>
+              <option value="claude-sonnet-4-6" selected>Sonnet</option>
+              <option value="claude-opus-4-7">Opus</option>
+            </select>
+          </label>
+          <label>
+            <input type="checkbox" id="cc-permitir-cerrados" /> Permitir editar capítulos cerrados/revisados
+          </label>
+        </div>
+      </div>
+      <div class="autonomo-seccion">
+        <h3>Plantillas</h3>
+        <div id="cc-plantillas" style="display:flex;flex-direction:column;gap:4px"></div>
+      </div>`;
+    const cont = document.getElementById("cc-plantillas");
+    for (const e of ejemplos) {
+      const b = document.createElement("button");
+      b.className = "btn-mini btn-editar";
+      b.style.textAlign = "left";
+      b.textContent = e.t;
+      b.addEventListener("click", () => { document.getElementById("cc-tarea").value = e.p; });
+      cont.appendChild(b);
+    }
+    document.getElementById("cc-acciones").innerHTML = "";
+    const btn = document.createElement("button");
+    btn.textContent = "Lanzar Claude Code";
+    btn.addEventListener("click", lanzarCC);
+    document.getElementById("cc-acciones").appendChild(btn);
+  }
+
+  async function lanzarCC() {
+    const tarea = document.getElementById("cc-tarea").value.trim();
+    if (!tarea) { alert("Escribe la tarea."); return; }
+    const modelo = document.getElementById("cc-modelo").value || undefined;
+    const permitirCerrados = document.getElementById("cc-permitir-cerrados").checked;
+    try {
+      const resp = await api(`/api/proyecto/${slugURL(state.proyectoSlug)}/autonomo/cc/lanzar`, {
+        method: "POST",
+        body: JSON.stringify({ tarea, modelo, permitir_cerrados: permitirCerrados }),
+      });
+      cc.sesionId = resp.sesion_id;
+      if (cc.pollingTimer) clearInterval(cc.pollingTimer);
+      cc.pollingTimer = setInterval(pollCC, 2000);
+      await refrescarPanelCC();
+    } catch (e) {
+      alert("No se pudo lanzar: " + (e.message || e));
+    }
+  }
+
+  async function pollCC() {
+    if (!cc.sesionId || !cc.overlay) return;
+    try {
+      const sesion = await api(`/api/proyecto/${slugURL(state.proyectoSlug)}/autonomo/cc/estado/${cc.sesionId}`);
+      pintarCCEjecucion(sesion);
+      if (["terminado","error","detenido"].includes(sesion.estado)) {
+        if (cc.pollingTimer) { clearInterval(cc.pollingTimer); cc.pollingTimer = null; }
+        // Refrescar árbol/git tras terminar.
+        try { await Promise.all([cargarArbol(), cargarGitStatus()]); } catch (_) {}
+      }
+    } catch (_) { /* ignore */ }
+  }
+
+  function pintarCCEjecucion(sesion) {
+    const body = document.getElementById("cc-body");
+    const claseEstado = {
+      "arrancando": "",
+      "ejecutando": "",
+      "terminado": "terminado",
+      "error": "error",
+      "detenido": "error",
+    }[sesion.estado] || "";
+    const duracion = sesion.fin ? (sesion.fin - sesion.inicio).toFixed(1) : (Math.max(0, Date.now()/1000 - sesion.inicio)).toFixed(1);
+    body.innerHTML = `
+      <div class="autonomo-estado ${claseEstado}">
+        <span class="tag">${sesion.estado}</span>
+        <b> · modelo ${sesion.modelo || 'default'}</b>
+        <div class="autonomo-metricas">
+          <div><b>${duracion}s</b><span>duración</span></div>
+          <div><b>${sesion.total_lineas}</b><span>líneas log</span></div>
+          <div><b>${sesion.pid || '—'}</b><span>pid</span></div>
+        </div>
+      </div>
+      <div class="autonomo-seccion">
+        <h3>Salida de Claude Code</h3>
+        <div class="autonomo-log" id="cc-log" style="max-height:420px"></div>
+      </div>`;
+    const logEl = document.getElementById("cc-log");
+    logEl.textContent = (sesion.log_lines || []).join("\n") || "(esperando salida...)";
+    logEl.scrollTop = logEl.scrollHeight;
+    const acciones = document.getElementById("cc-acciones");
+    acciones.innerHTML = "";
+    if (["arrancando","ejecutando"].includes(sesion.estado)) {
+      const d = document.createElement("button");
+      d.className = "detener";
+      d.textContent = "Detener sesión";
+      d.addEventListener("click", async () => {
+        if (!confirm("Detener la sesión de Claude Code?")) return;
+        await api(`/api/proyecto/${slugURL(state.proyectoSlug)}/autonomo/cc/detener/${sesion.id}`, {
+          method: "POST", body: "{}"
+        });
+        await refrescarPanelCC();
+      });
+      acciones.appendChild(d);
+    } else {
+      const n = document.createElement("button");
+      n.textContent = "Nueva sesión";
+      n.addEventListener("click", () => pintarCCConfiguracion(sesion));
+      acciones.appendChild(n);
+    }
+  }
+
   // ------------------------------------------------------ Modo autónomo
   const autonomo = {
     overlay: null,
@@ -1978,6 +2157,7 @@ Antes de arrancar, opcionalmente pon un párrafo de tu prosa en <code>05_control
     });
     document.getElementById("btn-configurar-remoto").addEventListener("click", abrirModalRemoto);
     document.getElementById("btn-autonomo").addEventListener("click", abrirPanelAutonomo);
+    document.getElementById("btn-cc").addEventListener("click", abrirPanelCC);
     document.getElementById("btn-deshacer").addEventListener("click", async () => {
       if (!state.proyectoSlug) return;
       if (!confirm("Revertir el último commit del proyecto activo? Se crea un commit nuevo que invierte los cambios.")) return;

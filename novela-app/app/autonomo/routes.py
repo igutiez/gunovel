@@ -10,6 +10,7 @@ from ..ai import propuestas as prop_mod
 from ..audit.db import registrar_evento
 from ..config import Config
 from ..files.project import ProyectoNoEncontrado, cargar_proyecto
+from . import claude_code as cc
 from . import db as autodb
 from .orquestador import ejecutar_paso
 
@@ -149,6 +150,105 @@ def api_detener(slug: str):
 
 
 # --- Preguntas al autor -----------------------------------------------------
+
+
+# --- Claude Code como backend agentivo ------------------------------------
+
+_PROMPT_CC_BASE = """Trabaja en la novela **{proyecto_slug}** del monorepo `gunovel`.
+
+Reglas en:
+- /CLAUDE.md del repo (léelo si no lo tienes en contexto).
+- CLAUDE.md del proyecto en {ruta_proyecto}/CLAUDE.md (léelo).
+- 05_control/plan_autonomo.md del proyecto si existe.
+
+Tools MCP disponibles: mcp__gunovel__listar_proyectos, resumen_canon_actual,
+obtener_info_capitulo, ver_capitulos_adyacentes, verificar_coherencia,
+auditar_capitulo. Tu cwd está en la raíz del repo; las rutas de ficheros
+del proyecto viven en `novelas/independientes/{proyecto_slug}/` (o la ruta
+equivalente para libros de saga).
+
+Tarea del autor para esta sesión:
+
+{tarea}
+
+Directrices:
+- Empieza con resumen_canon_actual para ubicarte.
+- Planea en tu TodoWrite antes de tocar ficheros.
+- Commit por cada propuesta coherente con mensaje `[IA] {{slug_proyecto}}/{{ruta}}: {{motivo}}`.
+- Si necesitas una decisión del autor que no está clara, añade la pregunta a `05_control/preguntas_autor.md` y termina la sesión.
+- NO toques capítulos con estado `revisado` o `cerrado`: el hook PreToolUse te los bloqueará.
+- Al terminar, deja un resumen claro de qué has hecho.
+"""
+
+
+@bp.post("/proyecto/<slug>/autonomo/cc/lanzar")
+@login_required
+def api_cc_lanzar(slug: str):
+    proyecto = _cargar_o_404(slug)
+    data = request.get_json(silent=True) or {}
+    tarea = (data.get("tarea") or "").strip()
+    modelo = data.get("modelo") or proyecto.config.get("modelo_por_defecto") or Config.MODELO_POR_DEFECTO
+    permitir_cerrados = bool(data.get("permitir_cerrados", False))
+    if not tarea:
+        abort(400, description="Falta 'tarea'.")
+
+    # Raíz del repo monorepo: padres hacia arriba hasta encontrar .git.
+    cwd = proyecto.ruta
+    while cwd != cwd.parent:
+        if (cwd / ".git").exists():
+            break
+        cwd = cwd.parent
+
+    prompt = _PROMPT_CC_BASE.format(
+        proyecto_slug=slug,
+        ruta_proyecto=str(proyecto.ruta.relative_to(cwd)),
+        tarea=tarea,
+    )
+
+    sesion = cc.iniciar_sesion(
+        proyecto_slug=slug,
+        prompt=prompt,
+        cwd=cwd,
+        modelo=modelo,
+        permitir_cerrados=permitir_cerrados,
+    )
+    registrar_evento(
+        tipo="sistema_init",
+        proyecto_slug=slug,
+        resultado=f"cc_sesion_iniciada:{sesion.id}:modelo={modelo}",
+    )
+    return jsonify({"ok": True, "sesion_id": sesion.id, "estado": sesion.estado}), 201
+
+
+@bp.get("/proyecto/<slug>/autonomo/cc/estado/<sesion_id>")
+@login_required
+def api_cc_estado(slug: str, sesion_id: str):
+    _cargar_o_404(slug)
+    sesion = cc.obtener_sesion(sesion_id)
+    if sesion is None or sesion.proyecto_slug != slug:
+        abort(404, description="Sesión no encontrada.")
+    return jsonify(cc.serializar(sesion))
+
+
+@bp.get("/proyecto/<slug>/autonomo/cc/ultima")
+@login_required
+def api_cc_ultima(slug: str):
+    _cargar_o_404(slug)
+    sesion = cc.ultima_sesion_proyecto(slug)
+    if sesion is None:
+        return jsonify({"activa": False})
+    return jsonify({"activa": True, "sesion": cc.serializar(sesion)})
+
+
+@bp.post("/proyecto/<slug>/autonomo/cc/detener/<sesion_id>")
+@login_required
+def api_cc_detener(slug: str, sesion_id: str):
+    _cargar_o_404(slug)
+    sesion = cc.obtener_sesion(sesion_id)
+    if sesion is None or sesion.proyecto_slug != slug:
+        abort(404, description="Sesión no encontrada.")
+    ok = cc.detener_sesion(sesion_id)
+    return jsonify({"ok": ok})
 
 
 @bp.get("/proyecto/<slug>/autonomo/preguntas")

@@ -8,3 +8,4 @@ python-dotenv>=1.0
 gunicorn>=21.2
 markdown>=3.5
 EbookLib>=0.18
+mcp>=1.0
